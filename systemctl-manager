@@ -1,0 +1,193 @@
+#!/usr/bin/python3
+
+import tkinter as tk
+from tkinter import ttk
+import subprocess
+import os
+
+def run_update_services_script():
+    # Open a new terminal window and run the command. Quick hack to portably run with sudo for now
+    subprocess.run(['x-terminal-emulator', '-e', 'sh', '-c', 'cat ./update-services.sh; echo "To execute the above, "; sudo ./update-services.sh'])
+    refresh() # Popen would be non-blocking, but then we cant refresh
+
+def refresh():
+    global services, states, state_var
+
+    with open('update-services.sh', 'w') as file:
+        file.write('#!/bin/sh\n')
+    os.chmod('update-services.sh', 0o755)
+
+    # Get all services and their states
+    services = get_services()
+    states = get_service_states(services)
+
+    # Create a variable to hold the selected state
+    state_var = tk.StringVar()
+    state_var.set('running')  # Initially show only running services
+
+    # Display services initially
+    filter_services()
+
+def disable_service():
+    selected_item = treeview.selection()[0]
+    service_name = treeview.item(selected_item)['values'][0]
+    with open('update-services.sh', 'a') as file:
+        file.write(f'systemctl stop {service_name}\n')
+        file.write(f'systemctl disable {service_name}\n')
+
+def enable_service():
+    selected_item = treeview.selection()[0]
+    service_name = treeview.item(selected_item)['values'][0]
+    with open('update-services.sh', 'a') as file:
+        file.write(f'systemctl enable {service_name}\n')
+
+def stop_service():
+    selected_item = treeview.selection()[0]
+    service_name = treeview.item(selected_item)['values'][0]
+    with open('update-services.sh', 'a') as file:
+        file.write(f'systemctl stop {service_name}\n')
+
+def get_services():
+    # Run systemctl command to get all services
+    # Can filter further if needed with '--type=service', '--type=socket', '--type=path'
+    result = subprocess.run(['systemctl', 'list-units', '--all', '--no-legend', '--no-pager' ], capture_output=True, text=True)
+    output = result.stdout
+
+    # Split the output into lines
+    lines = output.splitlines()
+
+    # Create a list of dictionaries for each service
+    services = []
+    for line in lines:
+        parts = line.split()
+        if '●' in line:
+            parts = parts[1:]
+        state, name = parts[3], parts[0]
+        services.append({'name': name, 'state': state})
+
+    return services
+
+sort_orders = {}
+
+def sort_services(column):
+    # Toggle the sorting order for the column
+    if column in sort_orders:
+        sort_orders[column] = not sort_orders[column]
+    else:
+        sort_orders[column] = True
+
+    # Sort the services based on the column and order
+    services.sort(key=lambda x: x[column.lower()], reverse=sort_orders[column])
+    display_services(filtered_services)
+
+def display_services(services):
+    # Clear existing treeview
+    for i in treeview.get_children():
+        treeview.delete(i)
+
+    # Insert services into treeview
+    for service in services:
+        treeview.insert("", "end", values=(service['name'], service['state']))
+
+def toggle_state():
+    current_state_index = states.index(state_var.get())
+    next_state_index = (current_state_index + 1) % len(states)
+    state_var.set(states[next_state_index])
+    filter_services()
+    if states[next_state_index] == 'All':
+        toggle_btn.config(text="Show All")
+    else:
+        toggle_btn.config(text=states[next_state_index])
+
+def filter_services():
+    state = state_var.get()
+    if state == 'All':
+        display_services(services)
+    else:
+        filtered_services = [service for service in services if service['state'] == state]
+        display_services(filtered_services)
+
+def get_service_states(services):
+    # Create a set of all unique service states
+    states = set()
+    for service in services:
+        states.add(service['state'])
+
+    # Prepend "All" to the list of states
+    states_list = ['All'] + list(states)
+    return states_list
+
+def get_service_log(service_name):
+    result = subprocess.run(['journalctl', f'-u{service_name}', '--no-pager', '--reverse'], capture_output=True, text=True)
+    return result.stdout
+
+def get_service_status(service_name):
+    result = subprocess.run(['systemctl', 'status', service_name, '--no-pager'], capture_output=True, text=True)
+    return result.stdout
+
+def show_service_log(event):
+    selected_item = treeview.selection()[0]
+    service_name = treeview.item(selected_item)['values'][0]
+    log_window = tk.Toplevel(root)
+    log_window.title(f"Log for {service_name}")
+    log_text = tk.Text(log_window, wrap=tk.NONE, width=150)
+    log_text.pack(fill="both", expand=True)
+    log_text.insert(tk.END, get_service_log(service_name))
+    log_text.config(state=tk.DISABLED)  # Make the text widget read-only
+
+def show_service_status(event):
+    selected_item = treeview.selection()[0]
+    service_name = treeview.item(selected_item)['values'][0]
+    log_window = tk.Toplevel(root)
+    log_window.title(f"Status for {service_name}")
+    log_text = tk.Text(log_window, wrap=tk.NONE, width=150)
+    log_text.pack(fill="both", expand=True)
+    log_text.insert(tk.END, get_service_status(service_name))
+    log_text.config(state=tk.DISABLED)  # Make the text widget read-only
+
+# Create the main window
+root = tk.Tk()
+root.title("Systemd Services")
+root.geometry("500x500")
+root.resizable(True, True)
+root.pack_propagate(False)  # Prevent window from automatically resizing
+
+# Create a treeview to display services
+treeview = ttk.Treeview(root, columns=("Name", "State"), show="headings")
+treeview.heading("Name", text="Name")
+treeview.heading("State", text="State")
+treeview.pack(fill="both", expand=True)
+
+treeview.heading("Name", text="Name", command=lambda: sort_services("Name"))
+treeview.heading("State", text="State", command=lambda: sort_services("State"))
+
+# Create a button to toggle states
+toggle_btn = tk.Button(root, text="Show All", command=toggle_state)
+toggle_btn.pack(side=tk.LEFT)
+
+execute_btn = tk.Button(root, text="Execute", command=run_update_services_script)
+execute_btn.pack(side=tk.RIGHT)
+
+execute_btn = tk.Button(root, text="Refresh", command=refresh)
+execute_btn.pack(side=tk.RIGHT)
+
+# Create buttons to update services
+disable_btn = tk.Button(root, text="Disable Service", command=disable_service)
+disable_btn.pack()
+
+enable_btn = tk.Button(root, text="Enable Service", command=enable_service)
+enable_btn.pack()
+
+stop_btn = tk.Button(root, text="Stop Service", command=stop_service)
+stop_btn.pack()
+
+# Double-click to show status
+treeview.bind("<Double-1>", show_service_status)
+
+# Right click to show status
+treeview.bind("<Button-3>", show_service_log)
+
+refresh()
+
+# Start the GUI event loop
+root.mainloop()
