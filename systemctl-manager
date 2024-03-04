@@ -120,7 +120,7 @@ def get_service_states(services):
     states = []
     for service in services:
         if service['state'] not in states:
-        states.append(service['state'])
+            states.append(service['state'])
         if service['state']=='running':
             states.append('All')
 
@@ -177,7 +177,7 @@ for heading in headings:
 treeview.pack(fill="both", expand=True)
 
 # Create a button to toggle states
-toggle_btn = tk.Button(root, text="running", command=toggle_state)
+toggle_btn = tk.Button(root, text="Show All", command=toggle_state)
 toggle_btn.pack(side=tk.LEFT)
 
 execute_btn = tk.Button(root, text="Execute", command=run_update_services_script)
