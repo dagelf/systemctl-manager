@@ -70,6 +70,8 @@ def get_services():
 sort_orders = {}
 
 def sort_services(column):
+    global filtered_services
+    
     # Toggle the sorting order for the column
     if column in sort_orders:
         sort_orders[column] = not sort_orders[column]
@@ -77,7 +79,8 @@ def sort_services(column):
         sort_orders[column] = True
 
     # Sort the services based on the column and order
-    services.sort(key=lambda x: x[column.lower()], reverse=sort_orders[column])
+    filtered_services.sort(key=lambda x: x[column], reverse=sort_orders[column])
+
     display_services(filtered_services)
 
 def display_services(services):
@@ -90,19 +93,23 @@ def display_services(services):
         treeview.insert("", "end", values=(service['name'], service['state']))
 
 def toggle_state():
-    current_state_index = states.index(state_var.get())
-    next_state_index = (current_state_index + 1) % len(states)
-    state_var.set(states[next_state_index])
+    global states, state_var
+    
+    states_list = list(states)
+    current_state_index = states_list.index(state_var.get())
+    next_state_index = (current_state_index + 1) % len(states_list)
+    state_var.set(states_list[next_state_index])
     filter_services()
-    if states[next_state_index] == 'All':
-        toggle_btn.config(text="Show All")
-    else:
-        toggle_btn.config(text=states[next_state_index])
+    toggle_btn.config(text='Show ' + states_list[(next_state_index + 1) % len(states_list)])
+
 
 def filter_services():
+    global filtered_services
+    
     state = state_var.get()
     if state == 'All':
-        display_services(services)
+        filtered_services=services
+        display_services(filtered_services)
     else:
         filtered_services = [service for service in services if service['state'] == state]
         display_services(filtered_services)
@@ -112,10 +119,10 @@ def get_service_states(services):
     states = set()
     for service in services:
         states.add(service['state'])
+        if service['state']=='running':
+            states.add('All')
 
-    # Prepend "All" to the list of states
-    states_list = ['All'] + list(states)
-    return states_list
+    return states
 
 def get_service_log(service_name):
     result = subprocess.run(['journalctl', f'-u{service_name}', '--no-pager', '--reverse'], capture_output=True, text=True)
@@ -126,24 +133,29 @@ def get_service_status(service_name):
     return result.stdout
 
 def show_service_log(event):
-    selected_item = treeview.selection()[0]
-    service_name = treeview.item(selected_item)['values'][0]
-    log_window = tk.Toplevel(root)
-    log_window.title(f"Log for {service_name}")
-    log_text = tk.Text(log_window, wrap=tk.NONE, width=150)
-    log_text.pack(fill="both", expand=True)
-    log_text.insert(tk.END, get_service_log(service_name))
-    log_text.config(state=tk.DISABLED)  # Make the text widget read-only
+    selected_items = treeview.selection()
+    print_r(selected_items)
+    if selected_items:
+        selected_item = selected_items[0]
+        service_name = treeview.item(selected_item)['values'][0]
+        log_window = tk.Toplevel(root)
+        log_window.title(f"Log for {service_name}")
+        log_text = tk.Text(log_window, wrap=tk.NONE, width=150)
+        log_text.pack(fill="both", expand=True)
+        log_text.insert(tk.END, get_service_log(service_name))
+        log_text.config(state=tk.DISABLED)  # Make the text widget read-only
 
 def show_service_status(event):
-    selected_item = treeview.selection()[0]
-    service_name = treeview.item(selected_item)['values'][0]
-    log_window = tk.Toplevel(root)
-    log_window.title(f"Status for {service_name}")
-    log_text = tk.Text(log_window, wrap=tk.NONE, width=150)
-    log_text.pack(fill="both", expand=True)
-    log_text.insert(tk.END, get_service_status(service_name))
-    log_text.config(state=tk.DISABLED)  # Make the text widget read-only
+    item = treeview.identify('item', event.x, event.y)
+    if item and item != '':
+        selected_item = treeview.selection()[0]
+        service_name = treeview.item(selected_item)['values'][0]
+        log_window = tk.Toplevel(root)
+        log_window.title(f"Status for {service_name}")
+        log_text = tk.Text(log_window, wrap=tk.NONE, width=150)
+        log_text.pack(fill="both", expand=True)
+        log_text.insert(tk.END, get_service_status(service_name))
+        log_text.config(state=tk.DISABLED)  # Make the text widget read-only
 
 # Create the main window
 root = tk.Tk()
@@ -153,16 +165,17 @@ root.resizable(True, True)
 root.pack_propagate(False)  # Prevent window from automatically resizing
 
 # Create a treeview to display services
-treeview = ttk.Treeview(root, columns=("Name", "State"), show="headings")
-treeview.heading("Name", text="Name")
-treeview.heading("State", text="State")
+headings = ["Name", "State"]
+treeview = ttk.Treeview(root, columns=headings, show="headings")
+
+# Create Treeview columns and bind the sorting function to each heading
+for heading in headings:
+    treeview.heading(heading, text=heading, command=lambda col=heading.lower(): sort_services(col))
+
 treeview.pack(fill="both", expand=True)
 
-treeview.heading("Name", text="Name", command=lambda: sort_services("Name"))
-treeview.heading("State", text="State", command=lambda: sort_services("State"))
-
 # Create a button to toggle states
-toggle_btn = tk.Button(root, text="Show All", command=toggle_state)
+toggle_btn = tk.Button(root, text="running", command=toggle_state)
 toggle_btn.pack(side=tk.LEFT)
 
 execute_btn = tk.Button(root, text="Execute", command=run_update_services_script)
