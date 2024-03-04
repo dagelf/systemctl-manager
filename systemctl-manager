@@ -95,13 +95,15 @@ def display_services(services):
 def toggle_state():
     global states, state_var
     
-    states_list = list(states)
-    current_state_index = states_list.index(state_var.get())
+    current_state = state_var.get()
+    states_list = states
+    current_state_index = states_list.index(current_state)
     next_state_index = (current_state_index + 1) % len(states_list)
-    state_var.set(states_list[next_state_index])
+    next_state = states_list[next_state_index]
+
+    state_var.set(next_state)
     filter_services()
     toggle_btn.config(text='Show ' + states_list[(next_state_index + 1) % len(states_list)])
-
 
 def filter_services():
     global filtered_services
@@ -115,12 +117,12 @@ def filter_services():
         display_services(filtered_services)
 
 def get_service_states(services):
-    # Create a set of all unique service states
-    states = set()
+    states = []
     for service in services:
-        states.add(service['state'])
+        if service['state'] not in states:
+        states.append(service['state'])
         if service['state']=='running':
-            states.add('All')
+            states.append('All')
 
     return states
 
