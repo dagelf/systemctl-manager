@@ -5,6 +5,9 @@ from tkinter import ttk
 import subprocess
 import os
 
+import threading
+treeview_lock = threading.Lock()
+
 def run_update_services_script():
     # Open a new terminal window and run the command. Quick hack to portably run with sudo for now
     subprocess.run(['x-terminal-emulator', '-e', 'sh', '-c', 'cat ./update-services.sh; echo "To execute the above, "; sudo ./update-services.sh'])
@@ -63,10 +66,42 @@ def get_services():
         if '●' in line:
             parts = parts[1:]
         state, name = parts[3], parts[0]
-        services.append({'name': name, 'state': state})
-
+#        services.append({'name': name, 'state': state})
+        services.append({'name': name, 'state': state, 'pid': '', 'docs': '', 'tasks': '', 'cpu': '', 'memory': '', 'cgroup': ''})
+        
     return services
 
+def update_service_details(service):
+    result = subprocess.run(['systemctl', 'show', service['name'], '--no-pager'], capture_output=True, text=True)
+    output = result.stdout
+    details = {}
+    for line in output.splitlines():
+        key, value = line.split('=', 1)
+        details[key] = value
+    service['pid'] = details.get('MainPID', '')
+    service['docs'] = details.get('Documentation', '').split()[0] if 'Documentation' in details else ''
+    service['tasks'] = details.get('TasksCurrent', '') if details.get('TasksCurrent', '') != '[not set]' else ''
+    service['cpu'] = details.get('CPUUsageNSec', '') if details.get('CPUUsageNSec', '') != '[not set]' else ''
+    service['memory'] = details.get('MemoryCurrent', '') if details.get('MemoryCurrent', '') != '[not set]' else ''
+    service['cgroup'] = details.get('ControlGroup', '') if details.get('ControlGroup', '') != '[not set]' else ''
+    treeview.item(service['id'], values=(service['name'], service['state'], service['pid'], service['docs'], service['tasks'], service['cpu'], service['memory'], service['cgroup']))
+
+
+background_update_flag = False
+
+def background_update():
+    global background_update_flag
+    
+    for service in services:
+        while not background_update_flag:
+            sleep(0.1)
+        treeview_lock.acquire()
+        try:
+            if 'id' in service:
+                update_service_details(service)
+        finally:
+            treeview_lock.release()
+            
 sort_orders = {}
 
 def sort_services(column):
@@ -78,31 +113,53 @@ def sort_services(column):
     else:
         sort_orders[column] = True
 
+    # Check if the column values are numeric
+    is_numeric = all(service[column].replace('.', '', 1).isdigit() for service in filtered_services if service[column] != '')
+    def sort_key(service):
+        value = service[column]
+        if is_numeric:
+            try:
+                return int(value)
+            except:
+                return -1
+        else:
+            return value
+#        return float(value) if is_numeric and value != '' else value
+        
     # Sort the services based on the column and order
-    filtered_services.sort(key=lambda x: x[column], reverse=sort_orders[column])
+    filtered_services.sort(key=sort_key, reverse=sort_orders[column])
 
     display_services(filtered_services)
 
 def display_services(services):
-    # Clear existing treeview
-    for i in treeview.get_children():
-        treeview.delete(i)
+    global background_update_flag
+    
+    treeview_lock.acquire()
+    try:
+        # Clear existing treeview
+        for i in treeview.get_children():
+            treeview.delete(i)
 
-    # Insert services into treeview
-    for service in services:
-        treeview.insert("", "end", values=(service['name'], service['state']))
+        # Insert services into treeview
+        for service in services:
+    #        treeview.insert("", "end", values=(service['name'], service['state']))
+            service['id'] = treeview.insert("", "end", values=(service['name'], service['state'], service['pid'], service['docs'], service['tasks'], service['cpu'], service['memory'], service['cgroup']))
+        background_update_flag = True
+
+    finally:
+        treeview_lock.release()
+        
+    background_thread = threading.Thread(target=background_update)
+    background_thread.start()
 
 def toggle_state():
     global states, state_var
     
     current_state = state_var.get()
-    states_list = states
-    current_state_index = states_list.index(current_state)
-    next_state_index = (current_state_index + 1) % len(states_list)
-    next_state = states_list[next_state_index]
+    current_state_index = states.index(current_state)
 
-    print(states)
-    print(f"current {next_state}")
+    next_state_index = (current_state_index + 1) % len(states)
+    next_state = states[next_state_index]
     state_var.set(next_state)
     filter_services()
     toggle_btn.config(text='Show ' + states_list[(next_state_index) % len(states_list)])
@@ -138,7 +195,6 @@ def get_service_status(service_name):
 
 def show_service_log(event):
     selected_items = treeview.selection()
-    print_r(selected_items)
     if selected_items:
         selected_item = selected_items[0]
         service_name = treeview.item(selected_item)['values'][0]
@@ -169,7 +225,8 @@ root.resizable(True, True)
 root.pack_propagate(False)  # Prevent window from automatically resizing
 
 # Create a treeview to display services
-headings = ["Name", "State"]
+#headings = ["Name", "State"]
+headings = ["Name", "State", "PID", "Docs", "Tasks", "CPU", "Memory", "CGroup"]
 treeview = ttk.Treeview(root, columns=headings, show="headings")
 
 # Create Treeview columns and bind the sorting function to each heading
