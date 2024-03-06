@@ -14,7 +14,7 @@ def run_update_services_script():
     refresh() # Popen would be non-blocking, but then we cant refresh
 
 def refresh():
-    global services, states, state_var
+    global services, states, state, updated
 
     with open('update-services.sh', 'w') as file:
         file.write('#!/bin/sh\n')
@@ -24,12 +24,10 @@ def refresh():
     services = get_services()
     states = get_service_states(services)
 
-    # Create a variable to hold the selected state
-    state_var = tk.StringVar()
-    state_var.set('running')  # Initially show only running services
+    state =  states.index('All') # to show on button, initially
 
-    # Display services initially
-    filter_services()
+    updated = 0
+    filter_services(states.index('running')) # filter on running, initially
 
 def disable_service():
     selected_item = treeview.selection()[0]
@@ -72,6 +70,7 @@ def get_services():
     return services
 
 def update_service_details(service):
+#    print("updating ",service['name'])
     result = subprocess.run(['systemctl', 'show', service['name'], '--no-pager'], capture_output=True, text=True)
     output = result.stdout
     details = {}
@@ -84,26 +83,19 @@ def update_service_details(service):
     service['cpu'] = details.get('CPUUsageNSec', '') if details.get('CPUUsageNSec', '') != '[not set]' else ''
     service['memory'] = details.get('MemoryCurrent', '') if details.get('MemoryCurrent', '') != '[not set]' else ''
     service['cgroup'] = details.get('ControlGroup', '') if details.get('ControlGroup', '') != '[not set]' else ''
+    treeview_lock.acquire()
     treeview.item(service['id'], values=(service['name'], service['state'], service['pid'], service['docs'], service['tasks'], service['cpu'], service['memory'], service['cgroup']))
-
-
-background_update_flag = False
+    treeview_lock.release()
 
 def background_update():
-    global background_update_flag
-    
     for service in services:
-        while not background_update_flag:
-            sleep(0.1)
-        treeview_lock.acquire()
         try:
             if 'id' in service:
                 update_service_details(service)
         finally:
-            treeview_lock.release()
-            
-sort_orders = {}
+            continue
 
+sort_orders = {}
 def sort_services(column):
     global filtered_services
     
@@ -129,11 +121,12 @@ def sort_services(column):
     # Sort the services based on the column and order
     filtered_services.sort(key=sort_key, reverse=sort_orders[column])
 
-    display_services(filtered_services)
+    display_services()
 
-def display_services(services):
-    global background_update_flag
-    
+updated = 0
+def display_services():
+    global filtered_services, updated
+
     treeview_lock.acquire()
     try:
         # Clear existing treeview
@@ -141,39 +134,33 @@ def display_services(services):
             treeview.delete(i)
 
         # Insert services into treeview
-        for service in services:
-    #        treeview.insert("", "end", values=(service['name'], service['state']))
+        for service in filtered_services:
             service['id'] = treeview.insert("", "end", values=(service['name'], service['state'], service['pid'], service['docs'], service['tasks'], service['cpu'], service['memory'], service['cgroup']))
-        background_update_flag = True
 
     finally:
         treeview_lock.release()
         
-    background_thread = threading.Thread(target=background_update)
-    background_thread.start()
+    if updated == 0:
+        background_thread = threading.Thread(target=background_update)
+        background_thread.start()
+        updated = 1
 
 def toggle_state():
-    global states, state_var
+    global states, state, toggle_btn
     
-    current_state = state_var.get()
-    current_state_index = states.index(current_state)
+    filter_services(state) # filter on what the button says is next
+    state = (state + 1) % len(states)
+    toggle_btn.config(text='Show ' + states[state])
 
-    next_state_index = (current_state_index + 1) % len(states)
-    next_state = states[next_state_index]
-    state_var.set(next_state)
-    filter_services()
-    toggle_btn.config(text='Show ' + states_list[(next_state_index) % len(states_list)])
-
-def filter_services():
-    global filtered_services
+def filter_services(state):
+    global services, filtered_services
     
-    state = state_var.get()
-    if state == 'All':
+    if state == states.index('All'):
         filtered_services=services
-        display_services(filtered_services)
     else:
-        filtered_services = [service for service in services if service['state'] == state]
-        display_services(filtered_services)
+        filtered_services = [service for service in services if service['state'] == states[state]]
+
+    display_services()
 
 def get_service_states(services):
     states = []
